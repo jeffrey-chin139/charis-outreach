@@ -7,3 +7,5 @@ coverage
 dist
 *.tsbuildinfo
 master-import-report.json
+
+.vercel
