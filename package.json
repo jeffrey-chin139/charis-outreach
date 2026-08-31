@@ -9,7 +9,8 @@
     "lint": "next lint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "import:master": "tsx scripts/import-master-list.ts"
+    "import:master": "tsx scripts/import-master-list.ts",
+    "sync:master-data": "tsx scripts/sync-local-master-data.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",

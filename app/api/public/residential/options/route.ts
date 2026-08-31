@@ -50,5 +50,9 @@ export async function GET(request: NextRequest) {
 }
 
 function unique(values: string[]) {
-  return Array.from(new Set(values));
+  return Array.from(new Set(values)).sort(naturalSort);
+}
+
+function naturalSort(left: string, right: string) {
+  return left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" });
 }

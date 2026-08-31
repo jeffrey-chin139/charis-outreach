@@ -1,23 +1,22 @@
-import { createClient } from "@supabase/supabase-js";
 import readXlsxFile from "read-excel-file/node";
-import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { buildUnitLabel } from "../lib/business-rules";
 
-type MasterRow = {
+type LocalMasterRow = {
+  id: string;
   neighbourhood: string;
   block: string;
   floor: string;
   stack: string;
-  active: boolean;
-  source_batch_id: string;
+  unitLabel: string;
+  doNotRevisit: boolean;
 };
 
 loadLocalEnv();
 
 const workbookPath = resolve(process.env.MASTER_LIST_PATH ?? "../neighbourhood master list.xlsx");
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const outputPath = resolve("lib/master-data.json");
 
 main().catch((error) => {
   console.error(error);
@@ -29,18 +28,11 @@ async function main() {
     throw new Error(`Master list not found: ${workbookPath}`);
   }
 
-  if (!supabaseUrl || !serviceRoleKey) {
-    throw new Error("Set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY before importing.");
-  }
-
   const sheetRows = await readXlsxFile(workbookPath);
-  const firstSheetName = "Sheet1";
-  const sourceBatchId = randomUUID();
+  const headers = new Map<string, number>();
   const seen = new Set<string>();
   const duplicates: Array<{ rowNumber: number; key: string }> = [];
-  const rows: MasterRow[] = [];
-  const neighbourhoods = new Set<string>();
-  const headers = new Map<string, number>();
+  const rows: LocalMasterRow[] = [];
 
   sheetRows[0].forEach((cell, index) => {
     headers.set(normalize(cell), index);
@@ -54,7 +46,6 @@ async function main() {
 
   sheetRows.slice(1).forEach((row, index) => {
     const rowNumber = index + 2;
-
     const neighbourhood = normalize(row[headers.get("Neighbourhood")!]);
     const block = normalize(row[headers.get("Block")!]);
     const floor = normalize(row[headers.get("Floor")!]).padStart(2, "0");
@@ -73,56 +64,20 @@ async function main() {
     }
 
     seen.add(key);
-    neighbourhoods.add(neighbourhood);
-    rows.push({ neighbourhood, block, floor, stack, active: true, source_batch_id: sourceBatchId });
+    rows.push({
+      id: `local-${rows.length + 1}`,
+      neighbourhood,
+      block,
+      floor,
+      stack,
+      unitLabel: buildUnitLabel(floor, stack),
+      doNotRevisit: false
+    });
   });
 
-  const supabase = createClient(supabaseUrl, serviceRoleKey, {
-    auth: { persistSession: false }
-  });
+  writeFileSync(outputPath, `${JSON.stringify({ rows }, null, 2)}\n`);
 
-  const chunkSize = 250;
-  for (let index = 0; index < rows.length; index += chunkSize) {
-    const chunk = rows.slice(index, index + chunkSize);
-    const { error } = await supabase
-      .from("residential_master")
-      .upsert(chunk, { onConflict: "neighbourhood,block,floor,stack" });
-
-    if (error) {
-      throw error;
-    }
-  }
-
-  const { data: staleRows, error: staleRowsError } = await supabase
-    .from("residential_master")
-    .update({ active: false })
-    .in("neighbourhood", Array.from(neighbourhoods))
-    .eq("active", true)
-    .or(`source_batch_id.is.null,source_batch_id.neq.${sourceBatchId}`)
-    .select("id");
-
-  if (staleRowsError) {
-    throw staleRowsError;
-  }
-
-  writeFileSync(
-    "master-import-report.json",
-    JSON.stringify(
-      {
-        workbookPath,
-        sheet: firstSheetName,
-        sourceBatchId,
-        importedRows: rows.length,
-        deactivatedRowsMissingFromWorkbook: staleRows?.length ?? 0,
-        duplicateRowsSkipped: duplicates
-      },
-      null,
-      2
-    )
-  );
-
-  console.log(`Imported ${rows.length} unique master rows.`);
-  console.log(`Deactivated ${staleRows?.length ?? 0} rows missing from the workbook.`);
+  console.log(`Synced ${rows.length} unique local master rows.`);
   console.log(`Skipped ${duplicates.length} duplicate rows.`);
 }
 
